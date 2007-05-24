@@ -38,6 +38,7 @@ use Pod::Usage;
 
 # Default Zabbix Agentd and Check configuration files
 my $default_agentd_conf = "/etc/zabbix/zabbix_agentd.conf";
+my $default_server_conf = "/etc/zabbix/zabbix_server.conf";
 my $default_multichecker_conf = "/etc/zabbix/zbx_multicheck.conf";
 
 # These default values are taken from the default zabbix configuration files
@@ -50,10 +51,13 @@ my $sender_bin = "/usr/local/bin/zabbix_sender";
 # Do not change anything below this line
 # ---------------------------------------------
 my $agentd_conf = $default_agentd_conf;
+my $server_conf = $default_server_conf;
 my $multichecker_conf = $default_multichecker_conf;
 my $man = 0;
 my $help = 0;
 my $debug = 0;
+my $hostname = undef; # First parameter of the command line arguments
+my $zbx_config;
 
 # Print debug messages, only if $debug > 0
 sub debug {
@@ -72,10 +76,11 @@ sub debug {
     }
 }
 
-# Parse the Zabbix Agentd configuration file to get the local hostname,
+# This function is called if this script is running on the Zabbix Agent.
+# - Parse the Zabbix Agentd configuration file to get the local hostname,
 # the server IP or name and the server port. This way, we don't have to
 # redefine them.
-# Return value:
+# - Return value:
 #    A array { hostname, servername, serverport }
 sub parse_agentd_conf {
     my $conffile = $_[0];
@@ -97,7 +102,35 @@ sub parse_agentd_conf {
     }
 
     my $result = {"hostname" => $hostname, "servername" => $server, "serverport" => $sport};
-    debug("Parse result = " . Dumper($result));
+    debug("Parse result for Zabbix Agentd = " . Dumper($result));
+    return $result;
+}
+
+# This function is called if this script is running on the Zabbix Server as
+# an External Script, on behalf of a distant Zabbix Agent.
+# - Parse the Zabbix Server configuration file to get the local 
+# server IP, and the server port. This way, we don't have to
+# redefine them. Note that we need to further add "hostname" to the array
+# returned by this function. This hostname was provided on the command line.
+# - Return value:
+#    A array { servername, serverport }
+sub parse_server_conf {
+    my $conffile = $_[0];
+    # Some parameters can have a default value
+    my ($server, $sport, $hostname) = ($default_server, $default_sport, undef);
+
+    debug("Parsing main Zabbix Server configuration file '$conffile'");
+    open (my $fh, "<$conffile") or die "ERROR: Can't open Zabbix server's configuration file '$conffile'";
+    while (<$fh>) {
+	$server = $1 if (m/^\s*ListenIP\s*=\s*([^\s,]*)/);
+	$sport = $1 if (m/^\s*ListenPort\s*=\s*(.*)/);
+    }
+    close($fh);
+
+    # Note that hostname is still be defined and must be completed later.
+
+    my $result = {"hostname" => $hostname, "servername" => $server, "serverport" => $sport};
+    debug("Parse result for Zabbix Server = " . Dumper($result));
     return $result;
 }
 
@@ -121,10 +154,10 @@ sub parse_multichecker_conf {
     open (my $fh, "<$conffile") or die "ERROR: Can't open Zabbix Multichecker's configuration file '$conffile'";
     while (<$fh>) {
 	chomp;
-	if (m/^(#|$)/) {
+	if (m/^\s*(#|$)/) {
 	    # Comment or blank line
 	    next;
-	} elsif (m/^\s*command\s*=\s*(.*)$/) {
+	} elsif (m/^\s*command\s*=\s*(.*)\s*$/) {
 	    # Parse command line, which must only be defined once
 	    if (!defined($command)) {
 		$command = $1;
@@ -151,13 +184,23 @@ sub parse_multichecker_conf {
 }
 
 # Parse the command line
+# The first argument must be "localhost" (we're running on a zabbix agent) or
+# a machine name (we're running on the zabbix server) as an External Script.
+$hostname = shift(@ARGV) if (scalar(@ARGV) and $ARGV[0] !~ m/^-/);
+# Parse the remaining arguments normally
 Getopt::Long::Configure(qw(gnu_getopt no_ignore_case));
 GetOptions('help|h|?' => \$help, man => \$man, 'debug|d' => \$debug,
-    'agent-conf|A=s' => \$agentd_conf,
+    'agent-conf|A=s' => \$agentd_conf, 'server-conf|C=s' => \$server_conf,
     'multichecker-conf|M=s' => \$multichecker_conf,
     'sender|S=s' => \$sender_bin) or pod2usage(2);
 pod2usage(1) if $help;
 pod2usage(-exitstatus => 0, -verbose => 2) if $man;
+
+# Hostname must be provided
+if (! defined($hostname)) {
+    pod2usage(-message => "ERROR: HOSTNAME must be the first argument",
+	-exitval => 3);
+}
 
 # zabbix_sender must be available
 if (! -r $sender_bin) {
@@ -166,7 +209,15 @@ if (! -r $sender_bin) {
 }
 
 # Parse the two configuration files
-my $agentd = &parse_agentd_conf($agentd_conf);
+if ($hostname eq 'localhost') {
+    debug("We're running on a Zabbix Agent");
+    $zbx_config = &parse_agentd_conf($agentd_conf);
+} else {
+    debug("We're running on the Zabbix Server");
+    $zbx_config = &parse_server_conf($server_conf);
+    debug("Adding hostname '$hostname' to the configuration variables");
+    $zbx_config->{hostname} = $hostname;
+}
 my $multiconfig = &parse_multichecker_conf($multichecker_conf);
 
 # Execute the command
@@ -183,7 +234,7 @@ while (my ($reg,$item) = each(%{$multiconfig->{items}})) {
     if ($result =~ m/$reg/m) {
 	debug("  == Found a match! Setting the item '$item' to '$1' ==");
 	# Now send the result back to the Zabbix Server
-	my $send_cmd = "$sender_bin --zabbix-server $agentd->{servername} --port $agentd->{serverport} --host $agentd->{hostname} --key '$item' --value '$1'";
+	my $send_cmd = "$sender_bin --zabbix-server $zbx_config->{servername} --port $zbx_config->{serverport} --host $zbx_config->{hostname} --key '$item' --value '$1'";
 	debug("   = Send command is : $send_cmd");
 	`$send_cmd` if (!$debug);
     }
@@ -203,11 +254,18 @@ uses C<zabbix_sender> to send the items back to the Zabbix server.
 
 =head1 SYNOPSIS
 
-zabbix_multichecker [options]
+zbx_multicheck HOSTNAME [options]
+
+B<HOSTNAME> must be 'localhost' if the script is running as a UserParameter on a Zabbix
+Agent.
+
+If running on the Zabbix Server, B<HOSTNAME> must be the name of the agent on behalf of
+which we're running this script (as an External Script).
 
 Options:
 
  --agent-conf=FILE, -A FILE	Path to the Zabbix Agentd configuration file
+ --server-conf=FILE, -C FILE	Path to the Zabbix Server configuration file
  --multichecker-conf=FILE, -M FILE	Path to zabbix_multichecker's configuration file
  --sender=FILE, -S FILE		Path of the zabbix_sender executable
  --debug, -d			Print more information (do not use in production!)
@@ -221,18 +279,26 @@ Options:
 =item B<--agent-conf=I<FILE>|-A I<FILE>> 
 
 Path of the Zabbix Agentd configuration file. This file is parsed to get the
-serveur name and port, and the local hostname.
-Defaults to '/etc/zabbix/zabbix_agentd.conf'.
+serveur name and port, and the local hostname. This parameter is only used if
+HOSTNAME is equal to 'localhost'.
+Defaults to 'F</etc/zabbix/zabbix_agentd.conf>'.
+
+=item B<--server-conf=I<FILE>|-C I<FILE>> 
+
+Path of the Zabbix Server configuration file. This file is parsed to get the
+serveur name and port. This parameter is only used if HOSTNAME is not equal to
+'localhost'.
+Defaults to 'F</etc/zabbix/zabbix_server.conf>'.
 
 =item B<--multichecker-conf=I<FILE>|-M I<FILE>>
 
 Path of zabbix_multichecker's configuration file. The file contains the command to
 execute and the list of regexp/items.
-Defaults to C</etc/zabbix/zbx_multicheck.conf>.
+Defaults to 'F</etc/zabbix/zbx_multicheck.conf>'.
 
 =item B<--sender=I<FILE>|-S I<FILE>>
 
-Path of the C<zabbix_sender> executable. Defaults to C</usr/local/bin/zabbix_sender>.
+Path of the C<zabbix_sender> executable. Defaults to 'F</usr/local/bin/zabbix_sender>'.
 
 =item B<--debug|-d>
 
@@ -251,12 +317,17 @@ Prints the manual page and exists.
 
 =head1 DESCRIPTION
 
-B<zabbix_multichecker> parses a specific configuration file and executes in a
+B<zbx_multicheck> parses a specific configuration file and executes in a
 shell the defined command.
 
 A list of regular expression is then executed on the output, and each
 corresponding match generates an item and its corresponding value. The items
 are then returned back to the server with the B<zabbix_agentd> program.
+
+This script can either run as a B<UserParameter> on the agent (in which case
+the first parameter must explicitely be 'F<localhost>'), or as an B<External Script>
+on the server (in which case the first parameter is automatically set to
+the agent we're monitoring).
 
 =head1 AUTHOR
 
