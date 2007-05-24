@@ -4,10 +4,11 @@
 
 # zabbix_multichecker: Execute and parse the output of a command and return
 # some selected values as Zabbix items to the Zabbix server. A configuration
-# file is used to determind the command to execute and the items to return.
+# file is used to determind the commands to execute and the items to return
+# for each command.
 #
-# Date: 2007/05/17
-# Version: 1.0
+# Date: 2007/05/25
+# Version: 2.0
 #
 # Copyright (C) 2007 Farzad FARID <ffarid@pragmatic-source.com>
 #
@@ -29,7 +30,6 @@
 # - Support multiple items per regular expression. For this we need to correctly parse 
 #   number of parentheses in the regex (or count the number of item names on the same 
 #   line in the configuration file) and provide the corresponding $1, $2, $3...
-# - 
 use warnings;
 use strict;
 use Data::Dumper;
@@ -139,16 +139,29 @@ sub parse_server_conf {
 #   then be parsed.
 # - A list of regular expressions and their corresponding items.
 # Return value:
-#  Return an array
-#  - "command" => "command to execute"
-#  - "items" => hash of { "regexp" => "item" }
+#  Return a hash of commands, each of which contains a hash of regexp -> items
+# 
+# For example:
+# $commands = {
+#       'sudo mysqladmin status' => {
+#                     'Queries per second avg: (\\d+\\.?\\d*)' => 'mysql.qps',
+#                     'Threads: (\\d+)' => 'mysql.threads',
+#                     'Slow queries: (\\d+)' => 'mysql.slowqueries',
+#                     'Questions: (\\d+)' => 'mysql.questions',
+#                     'Uptime: (\\d+)' => 'mysql.uptime'
+#                   },
+#       'sudo mysqladmin version' => {
+#                      '^Server version\\s*(.*)\\s*$' => 'mysql.server-version',
+#                      '^Protocol version\\s*(.*)\\s*$' => 'mysql.protocol-version'
+#                    }
+#     };
+#
 # TODO:
-# - For the moment only parses one item per regexp
 # - Does not accept the [] syntax in the item name
 sub parse_multichecker_conf {
     my $conffile = $_[0];
+    my $commands = {};
     my $command = undef;
-    my %items;
 
     debug("Parsing Multichecker configuration file '$conffile'");
     open (my $fh, "<$conffile") or die "ERROR: Can't open Zabbix Multichecker's configuration file '$conffile'";
@@ -159,14 +172,17 @@ sub parse_multichecker_conf {
 	    next;
 	} elsif (m/^\s*command\s*=\s*(.*)\s*$/) {
 	    # Parse command line, which must only be defined once
-	    if (!defined($command)) {
-		$command = $1;
-	    } else {
-		die("ERROR: Command line redefined in multichecker configuration file '$conffile'");
+	    $command = $1;
+	    if (exists($commands->{$command})) {
+		die("ERROR: Command line '$command' redefined in multichecker configuration file '$conffile'");
 	    }
-	} elsif (m/^\s*item\s*=\s*\/(.*)\/\s*,\s*([[:alnum:].]+)\s*$/) {
+	    $commands->{$command} = {};
+	} elsif (m/^\s*item\s*=\s*\/(.*)\/\s*,\s*([[:alnum:].-]+)\s*$/) {
 	    # Parse regexp/item line
-	    $items{$1} = $2;
+	    if (!defined($command)) {
+		die("ERROR: Item '$_' found before command definition in multichecker configuration file '$conffile'");
+	    }
+	    $commands->{$command}->{$1} = $2;
 	} else {
 	    # Unparseable line
 	    die "ERROR: Syntax error in multichecker configuration file '$conffile': \"$_\"";
@@ -174,13 +190,12 @@ sub parse_multichecker_conf {
     }
     close($fh);
 
-    if (!defined($command) or !scalar(%items)) {
+    if (!scalar($commands)) {
 	die "ERROR: Missing command and/or item lines in multichecker configuration file '$conffile'";
     }
 
-    my $config = { "command" => $command, "items" => \%items };
-    debug("Parse result = " . Dumper($config));
-    return $config;
+    debug("Parse result = " . Dumper($commands));
+    return $commands;
 }
 
 # Parse the command line
@@ -220,26 +235,28 @@ if ($hostname eq 'localhost') {
 }
 my $multiconfig = &parse_multichecker_conf($multichecker_conf);
 
-# Execute the command
-debug("Executing '$multiconfig->{command}'");
-my $result = `$multiconfig->{command}`;
-debug("==== Command result ====");
-debug($result);
-debug("==== End command result ====");
+# Execute the commands
+while (my ($command, $items) = each(%$multiconfig)) {
+    debug("#### Executing '$command' ####");
+    my $result = `$command`;
+    debug("==== Command result ====");
+    debug($result);
+    debug("==== End command result ====");
 
-# And now parse the output and compare to regular expressions
-debug("==== Parsing output and generating items ====");
-while (my ($reg,$item) = each(%{$multiconfig->{items}})) {
-    debug(" === Matching against '$reg' ===");
-    if ($result =~ m/$reg/m) {
-	debug("  == Found a match! Setting the item '$item' to '$1' ==");
-	# Now send the result back to the Zabbix Server
-	my $send_cmd = "$sender_bin --zabbix-server $zbx_config->{servername} --port $zbx_config->{serverport} --host $zbx_config->{hostname} --key '$item' --value '$1'";
-	debug("   = Send command is : $send_cmd");
-	`$send_cmd` if (!$debug);
+    # And now parse the output and compare to regular expressions
+    debug("==== Parsing output and generating items ====");
+    while (my ($reg,$item) = each(%$items)) {
+	debug(" === Matching against '$reg' ===");
+	if ($result =~ m/$reg/m) {
+	    debug("  == Found a match! Setting the item '$item' to '$1' ==");
+	    # Now send the result back to the Zabbix Server
+	    my $send_cmd = "$sender_bin --zabbix-server $zbx_config->{servername} --port $zbx_config->{serverport} --host $zbx_config->{hostname} --key '$item' --value '$1'";
+	    debug("   = Send command is : $send_cmd");
+	    `$send_cmd` if (!$debug);
+	}
     }
+    debug("==== End output parsing ====");
 }
-debug("==== End output parsing ====");
 
 print "OK\n";
 exit 0;
@@ -292,8 +309,8 @@ Defaults to 'F</etc/zabbix/zabbix_server.conf>'.
 
 =item B<--multichecker-conf=I<FILE>|-M I<FILE>>
 
-Path of zabbix_multichecker's configuration file. The file contains the command to
-execute and the list of regexp/items.
+Path of zabbix_multichecker's configuration file. The file contains the commands to
+execute and the list of regexp/items for each command.
 Defaults to 'F</etc/zabbix/zbx_multicheck.conf>'.
 
 =item B<--sender=I<FILE>|-S I<FILE>>
@@ -328,6 +345,26 @@ This script can either run as a B<UserParameter> on the agent (in which case
 the first parameter must explicitely be 'F<localhost>'), or as an B<External Script>
 on the server (in which case the first parameter is automatically set to
 the agent we're monitoring).
+
+=head1 SAMPLE CONFIGURATION
+
+Sample F<zbx_multicheck.conf>:
+
+  # First command to execute and whose output we are going to parse
+  command = sudo mysqladmin status
+  # Each line defines a regular expression and an item corresponding to
+  # the first group of parentheses in the regexp.
+  item = /Uptime: (\d+)/, mysql.uptime
+  item = /Threads: (\d+)/, mysql.threads
+  item = /Questions: (\d+)/, mysql.questions
+  item = /Slow queries: (\d+)/, mysql.slowqueries
+  item = /Queries per second avg: (\d+\.?\d*)/, mysql.qps
+
+  # Second command and its set of items
+  command = sudo mysqladmin version
+  item = /^Server version\s*(.*)\s*$/, mysql.server-version
+  item = /^Protocol version\s*(.*)\s*$/, mysql.protocol-version
+
 
 =head1 AUTHOR
 
