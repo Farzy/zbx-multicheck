@@ -38,7 +38,7 @@ use Pod::Usage;
 
 # Default Zabbix Agentd and Check configuration files
 my $default_agentd_conf = "/etc/zabbix/zabbix_agentd.conf";
-my $default_multichecker_conf = "/etc/zabbix/zabbix_multichecker.conf";
+my $default_multichecker_conf = "/etc/zabbix/zbx_multicheck.conf";
 
 # These default values are taken from the default zabbix configuration files
 # or are reasonnable defaults
@@ -228,7 +228,7 @@ Defaults to '/etc/zabbix/zabbix_agentd.conf'.
 
 Path of zabbix_multichecker's configuration file. The file contains the command to
 execute and the list of regexp/items.
-Defaults to C</etc/zabbix/zabbix_multichecker.conf>.
+Defaults to C</etc/zabbix/zbx_multicheck.conf>.
 
 =item B<--sender=I<FILE>|-S I<FILE>>
 
