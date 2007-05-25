@@ -262,6 +262,9 @@ my $multiconfig = &parse_multichecker_conf($multichecker_conf);
 
 # Execute the commands
 while (my ($command, $items) = each(%$multiconfig)) {
+    debug("#### Command to execute before hostname substitution: '$command' ####");
+    # Remplace @HOSTNAME@ by the name of the server, if needed
+    $command =~ s/\@HOSTNAME\@/$zbx_config->{hostname}/ge;
     debug("#### Executing '$command' ####");
     my $result = `$command`;
     debug("==== Command result ====");
@@ -377,6 +380,9 @@ on the server (in which case the first parameter is automatically set to
 the agent we're monitoring).
 
 =head1 SAMPLE CONFIGURATION
+
+Every occurrence of B<@HOSTNAME@> in the command line will be replaced by the
+name of the computer for which we are calculating items.
 
 Sample F<zbx_multicheck.conf>:
 
