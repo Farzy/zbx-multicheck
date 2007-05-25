@@ -50,12 +50,14 @@ my $sender_bin = "/usr/local/bin/zabbix_sender";
 #----------------------------------------------
 # Do not change anything below this line
 # ---------------------------------------------
+my $VERSION="2.0";
 my $agentd_conf = $default_agentd_conf;
 my $server_conf = $default_server_conf;
 my $multichecker_conf = $default_multichecker_conf;
 my $man = 0;
 my $help = 0;
 my $debug = 0;
+my $show_version = 0;
 my $hostname = undef; # First parameter of the command line arguments
 my $zbx_config;
 
@@ -205,11 +207,34 @@ $hostname = shift(@ARGV) if (scalar(@ARGV) and $ARGV[0] !~ m/^-/);
 # Parse the remaining arguments normally
 Getopt::Long::Configure(qw(gnu_getopt no_ignore_case));
 GetOptions('help|h|?' => \$help, man => \$man, 'debug|d' => \$debug,
+    'version|v' => \$show_version,
     'agent-conf|A=s' => \$agentd_conf, 'server-conf|C=s' => \$server_conf,
     'multichecker-conf|M=s' => \$multichecker_conf,
     'sender|S=s' => \$sender_bin) or pod2usage(2);
 pod2usage(1) if $help;
 pod2usage(-exitstatus => 0, -verbose => 2) if $man;
+if ($show_version) {
+    print <<EOFHELP;
+zbx_multicheck v$VERSION
+
+Copyright (C) 2007 Farzad FARID <ffarid\@pragmatic-source.com>
+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+EOFHELP
+    exit 1;
+}
 
 # Hostname must be provided
 if (! defined($hostname)) {
@@ -287,6 +312,7 @@ Options:
  --sender=FILE, -S FILE		Path of the zabbix_sender executable
  --debug, -d			Print more information (do not use in production!)
  --help|-h			Brief help message
+ --version|-v			Print version and license
  --man				Full documentation
 
 =head1 OPTIONS
@@ -329,6 +355,10 @@ Prints a brief help message and exits.
 =item B<--man>
 
 Prints the manual page and exists.
+
+=item B<--version|-v>
+
+Print program version and license.
 
 =back
 
