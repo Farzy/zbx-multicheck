@@ -179,7 +179,7 @@ sub parse_multichecker_conf {
 		die("ERROR: Command line '$command' redefined in multichecker configuration file '$conffile'");
 	    }
 	    $commands->{$command} = {};
-	} elsif (m/^\s*item\s*=\s*\/(.*)\/\s*,\s*([[:alnum:].-]+)\s*$/) {
+	} elsif (m/^\s*item\s*=\s*\/(.*)\/\s*,\s*([[:alnum:].-_]+)\s*$/) {
 	    # Parse regexp/item line
 	    if (!defined($command)) {
 		die("ERROR: Item '$_' found before command definition in multichecker configuration file '$conffile'");
